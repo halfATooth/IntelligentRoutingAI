@@ -12,8 +12,8 @@ duration = 100 # seconds
 interval = 500 # ms
 
 def predict(data):
-  print('rev: {0}'.format(data))
-  return 'res: {0}'.format(data)
+  print('receive: \n{0}'.format(data))
+  return '0 1 1/0 2 1/1 3 1/2 3 1'
 
 def getPaddedLength(s):
   length = len(s)
