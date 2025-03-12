@@ -71,10 +71,13 @@ def generate_topology_data(minNodes:int=4, maxNodes:int=30, graphNum:int=20, dat
         dir = f'{dataDir}/nodes_num_{n}'
         write_graphs_to_file(graphs, dir)
         
-def read_data():
+def read_data(min=4, max=20):
+    '''
+    读取ns-3生成的网络状态数据
+    '''
     data = []
     try:
-        for node in range(4, 5):
+        for node in range(min, max+1):
             for topo in range(1, 20):
                 with open(f'./data/net/nodes_num_{node}/{topo}/features', 'r', encoding='utf-8') as file:
                     lines = file.readlines()
@@ -87,43 +90,51 @@ def read_data():
     print('read data complete')
     return data
 
-def get_dataset():
-    data = read_data()
-    
+def get_dataset(min=4, max=20):
+    '''
+    把读取到的数据聚类，得到类别标签
+    '''
+    data = read_data(min, max)
+    # 使用cuda
     if torch.cuda.is_available():
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
     print(f"Using device: {device}")
-    
     data = torch.tensor(data, dtype=torch.float32).to(device)
+    # 归一化
     X = process.normalization(data)
+    # 使用fcm聚类得到10个中心向量 和 每个特征点分别到10个中心点的距离
     _, Dist = process.iterate_cal(X.T)
+    # 选择距离特征点最近的中心点的下标，作为特征点的类别标签
     y = torch.argmin(Dist, dim=0)
     print('dataset ready')
     return X.cpu(), y.cpu()
     
 def visualize_clusters():
-    X, y = get_dataset()
+    '''
+    使用TSNE把数据可视化
+    '''
+    X, y = get_dataset(min=9, max=10)
     X = X.numpy()
     y = y.numpy()
     # 创建TSNE对象，将数据降维到二维
     tsne = TSNE(n_components=2, random_state=42)
     X_tsne = tsne.fit_transform(X)
-
     # 可视化降维后的数据
     plt.figure(figsize=(10, 8))
-    
     # 根据不同的标签绘制不同颜色的点
     for i in range(len(np.unique(y))):
         plt.scatter(X_tsne[y == i, 0], X_tsne[y == i, 1], label=f'Class {i}')
-
     plt.title('T-SNE Visualization of Dataset')
-    plt.xlabel('Dimension 1')
-    plt.ylabel('Dimension 2')
-    plt.legend()
-    plt.savefig('tsne-2D-n0405-t0120.png')
+    # plt.legend()
+    plt.savefig('tsne-2D2.png')
 
-    
-visualize_clusters()
-# test()
+def save():
+    X, y = get_dataset()
+    tensor_dict = { 'feature': X, 'label': y }
+    torch.save(tensor_dict, './data/tensor/n4n20.pt')
+
+def load():
+    tensor_dict = torch.load('./data/tensor/n4n20.pt')
+    return tensor_dict['feature'], tensor_dict['label']
