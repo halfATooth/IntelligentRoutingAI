@@ -2,6 +2,12 @@ import networkx as nx
 import random
 import matplotlib.pyplot as plt
 import os
+import torch
+import process
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+from sklearn.datasets import load_iris
 
 def generate_random_connected_graphs(n, maxEdges, m):
     """
@@ -64,3 +70,60 @@ def generate_topology_data(minNodes:int=4, maxNodes:int=30, graphNum:int=20, dat
         graphs = generate_random_connected_graphs(n, int(n*1.6), graphNum)
         dir = f'{dataDir}/nodes_num_{n}'
         write_graphs_to_file(graphs, dir)
+        
+def read_data():
+    data = []
+    try:
+        for node in range(4, 5):
+            for topo in range(1, 20):
+                with open(f'./data/net/nodes_num_{node}/{topo}/features', 'r', encoding='utf-8') as file:
+                    lines = file.readlines()
+                    for line in lines:
+                        if len(line) > 2:
+                            d = [float(num) for num in line.split(' ')[2:]]
+                            data.append(d)
+    except FileNotFoundError:
+        print("文件未找到")
+    print('read data complete')
+    return data
+
+def get_dataset():
+    data = read_data()
+    
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
+    
+    data = torch.tensor(data, dtype=torch.float32).to(device)
+    X = process.normalization(data)
+    _, Dist = process.iterate_cal(X.T)
+    y = torch.argmin(Dist, dim=0)
+    print('dataset ready')
+    return X.cpu(), y.cpu()
+    
+def visualize_clusters():
+    X, y = get_dataset()
+    X = X.numpy()
+    y = y.numpy()
+    # 创建TSNE对象，将数据降维到二维
+    tsne = TSNE(n_components=2, random_state=42)
+    X_tsne = tsne.fit_transform(X)
+
+    # 可视化降维后的数据
+    plt.figure(figsize=(10, 8))
+    
+    # 根据不同的标签绘制不同颜色的点
+    for i in range(len(np.unique(y))):
+        plt.scatter(X_tsne[y == i, 0], X_tsne[y == i, 1], label=f'Class {i}')
+
+    plt.title('T-SNE Visualization of Dataset')
+    plt.xlabel('Dimension 1')
+    plt.ylabel('Dimension 2')
+    plt.legend()
+    plt.savefig('tsne-2D-n0405-t0120.png')
+
+    
+visualize_clusters()
+# test()
