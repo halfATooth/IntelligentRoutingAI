@@ -90,32 +90,50 @@ def read_data(min=4, max=20):
     print('read data complete')
     return data
 
-def get_dataset(min=4, max=20):
+def get_dataset(min=4, max=20, m=2, default_data='./data/tensor/raw.pt'):
     '''
     把读取到的数据聚类，得到类别标签
     '''
-    data = read_data(min, max)
     # 使用cuda
     if torch.cuda.is_available():
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
     print(f"Using device: {device}")
-    data = torch.tensor(data, dtype=torch.float32).to(device)
-    # 归一化
-    X = process.normalization(data)
-    # 使用fcm聚类得到10个中心向量 和 每个特征点分别到10个中心点的距离
-    _, Dist = process.iterate_cal(X.T)
-    # 选择距离特征点最近的中心点的下标，作为特征点的类别标签
-    y = torch.argmin(Dist, dim=0)
-    print('dataset ready')
-    return X.cpu(), y.cpu()
     
+    try:
+        X = torch.load(default_data).to(device)
+    except FileNotFoundError:
+        data = read_data(min, max)
+        data = torch.tensor(data, dtype=torch.float32).to(device)
+        # 归一化
+        X = process.normalization(data)
+        torch.save(X, default_data)
+    
+    try:
+        center_weights = torch.load('./data/tensor/center-weights.pt')
+        centers = center_weights['centers'].to(device)
+        weights = center_weights['weights'].to(device)
+        dist = process.cal_distance_matrix(centers.T, X.T)
+        # top_values, top_indices = torch.topk(-dist, k=3, dim=0)
+        y = torch.argmin(dist, dim=0)
+        y = weights[y]
+        
+    except FileNotFoundError:
+        print('未找到人工设定的权值，进行fcm聚类')
+        # 使用fcm聚类得到10个中心向量 和 每个特征点分别到10个中心点的距离
+        centers, Dist = process.iterate_cal(X.T, m=m)
+        # 选择距离特征点最近的中心点的下标，作为特征点的类别标签
+        # 这样计算得到的类别并无实际意义，需要进一步人工筛选得到类别-权值的对应关系
+        y = torch.argmin(Dist, dim=0)
+    print('dataset ready')
+    return X.cpu(), y.cpu(), centers.cpu()
+
 def visualize_clusters():
     '''
     使用TSNE把数据可视化
     '''
-    X, y = get_dataset(min=9, max=10)
+    X, y, _ = get_dataset(min=9, max=20)
     X = X.numpy()
     y = y.numpy()
     # 创建TSNE对象，将数据降维到二维
@@ -130,11 +148,32 @@ def visualize_clusters():
     # plt.legend()
     plt.savefig('tsne-2D2.png')
 
-def save():
-    X, y = get_dataset()
-    tensor_dict = { 'feature': X, 'label': y }
-    torch.save(tensor_dict, './data/tensor/n4n20.pt')
+def save(filename):
+    X, y, c = get_dataset()
+    tensor_dict = { 'feature': X, 'label': y, 'center': c }
+    torch.save(tensor_dict, f'./data/tensor/{filename}.pt')
 
-def load():
-    tensor_dict = torch.load('./data/tensor/n4n20.pt')
-    return tensor_dict['feature'], tensor_dict['label']
+def load(path):
+    tensor_dict = torch.load(path)
+    return tensor_dict['feature'], tensor_dict['label'], tensor_dict['center']
+
+def set_weight():
+    _, _, c = get_dataset(m=2.5)
+    c = c.T
+    for i in range(c.size(0)):
+        print(f'{c[i,0]}#{c[i,1]}#{c[i,2]}#{c[i,3]}')
+
+def set_centers():
+    centers = torch.tensor([
+        [-0.585467696, 0.008220225, -0.551420867, -0.765355527],
+        [2.087510824, -0.013327285, 0.391151488, -0.274538726],
+        [0.144209802, 0.625683963, 0.352233231, 0.496681154],
+        [0.137531653, -0.645043314, 0.362915069, 0.498750418],
+        [0.346270621, -0.010934002, 0.359801352, 0.353592128],
+        [-0.606748998, -1.089063764, -0.56386143, -0.785086215],
+        [-0.084792867, 0.009439957, 0.355262339, 1.188973904],
+        [-0.604935825, 1.101434588, -0.563349009, -0.782497406]
+    ])
+    weights = torch.tensor([9, 5, 2, 6, 5, 10, 4, 8])
+    tensor_dict = { 'centers': centers, 'weights': weights }
+    torch.save(tensor_dict, f'./data/tensor/center-weights.pt')
