@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# dataset
+data/net/
+data/cora/
+data/tensor/center-vectors.pt
+data/tensor/raw.pt
+transformed_data/
