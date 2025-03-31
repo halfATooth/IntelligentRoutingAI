@@ -93,7 +93,39 @@ def get_transformed_graph(node, topo):
                     new_edges.append((i, j))
     return node_map, new_edges
 
-def transform_raw_data(min, max):
+def extract_data(filepath):
+    data_list = []
+    with open(filepath, 'r', encoding='utf-8') as file:
+        content = content = file.read()
+        # 按 {} 分割数据
+        data_blocks = content.split('{')
+        for block in data_blocks:
+            if block.strip():
+                block = block.strip().rstrip('}').strip()
+                lines = block.split('\n')
+                block_data = []
+                for line in lines:
+                    datastr = line.split(' ')
+                    data = [int(datastr[0]), int(datastr[1]), float(datastr[2]),
+                            float(datastr[3]), float(datastr[4]), float(datastr[5])]
+                    block_data.append(data)
+                data_list.append(block_data)
+    return data_list
+
+def get_feature_from_record(origin_record, node_map):
+    block_data = [None] * len(node_map)
+    for data in origin_record:
+        index = node_map[(min(data[0], data[1]), max(data[0], data[1]))]
+        data = data[2:]
+        if block_data[index] is None:
+            block_data[index] = data
+        else:
+            block_data[index][0] = (block_data[index][0] + data[0]) / 2
+            block_data[index][2] = (block_data[index][2] + data[2]) / 2
+            block_data[index][3] = block_data[index][3] + data[3]
+    return block_data
+
+def transform_raw_data(min_node, max_node):
     '''
     把原始数据预处理：
     1. 拓扑边点互换
@@ -103,72 +135,26 @@ def transform_raw_data(min, max):
         第三维: content = {'topo': new_edges, 'features': feature_arr, 'len': ct}
         feature_arr: 二维数组，顶点编号*特征值
     '''
-    try:
-        node_content = []
-        for node in range(min, max+1):
-            topo_content = []
-            for topo in range(1, 20):
-                node_map, new_edges = get_transformed_graph(node, topo)
-                # ct记录当前的拓扑有多少条特征
-                ct = 0
-                feature_arr = []
-                with open(f'./data/net/nodes_num_{node}/{topo}/features', 'r', encoding='utf-8') as file:
-                    lines = file.readlines()
-                    graph_features = {}
-                    for line in lines:
-                        line = line.rstrip('\n')
-                        if line=='{':
-                            continue
-                        elif line=='}':
-                            ct = ct + len(graph_features)
-                            arr = [None] * len(graph_features)
-                            for k, v in graph_features.items():
-                                arr[k] = v
-                            feature_arr.extend(arr)
-                            graph_features = {}
-                        else:
-                            d = [num for num in line.split(' ')]
-                            # transformed node index
-                            if int(d[0]) > int(d[1]):
-                                index = node_map[(int(d[1]), int(d[0]))]
-                            else:
-                                index = node_map[(int(d[0]), int(d[1]))]
-                            delay_avg = float(d[2])
-                            bandwith = float(d[3])
-                            droprate_avg = float(d[4])
-                            throughoutput = float(d[5])
-                            if index in graph_features:
-                                graph_features[index][0] = (graph_features[index][0] + delay_avg) / 2
-                                graph_features[index][2] = (graph_features[index][2] + droprate_avg) / 2
-                                graph_features[index][3] = graph_features[index][3] + throughoutput
-                            else:
-                                graph_features[index] = [delay_avg, bandwith, droprate_avg, throughoutput]
-                content = {'topo': new_edges, 'features': feature_arr, 'len': ct}
-                topo_content.append(content)
-            node_content.append(topo_content)
-        jsonstr = json.dumps(node_content)
-        with open('./data/transformed_data/raw.json', 'w') as file:
-            file.write(jsonstr)
-    except FileNotFoundError:
-        print("文件未找到")
+    topology = []
+    features = []
+    sizes = []
+    for node in range(min_node, max_node+1):
+        for topo in range(1, 21):
+            node_map, new_edges = get_transformed_graph(node, topo)
+            topology.append(new_edges)
+            
+            topodata = extract_data(f'./data/net/nodes_num_{node}/{topo}/features')
+            for block in topodata:
+                data = get_feature_from_record(block, node_map)
+                features.extend(data)
+                sizes.append(len(block) // 2)
+    return features, topology, sizes 
 
 def read_data(file_path='./data/transformed_data/raw.json'):
     '''
     读取ns-3生成的网络状态数据
     '''
-    data = []
-    if not os.path.isfile(file_path):
-        transform_raw_data(4, 20)
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            raw = json.load(file)
-            for node_content in raw:
-                for topo_content in node_content:
-                    feature_arr = topo_content['features']
-                    data.extend(feature_arr)
-    except Exception as e:
-        print(f"err: {e}")
-    return data
+    return transform_raw_data(4, 20)
 
 def get_dataset(m=2, default_data='./data/tensor/raw.pt'):
     '''
@@ -181,20 +167,15 @@ def get_dataset(m=2, default_data='./data/tensor/raw.pt'):
         device = torch.device("cpu")
     print(f"Using device: {device}")
     
-    if os.path.isfile(default_data):
-        X = torch.load(default_data).to(device)
-    else:
-        data = read_data()
-        data = torch.tensor(data, dtype=torch.float32).to(device)
-        # 归一化
-        X = process.normalization(data)
-        torch.save(X, default_data)
+    features, topology, sizes = read_data()
+    data = torch.tensor(features, dtype=torch.float32).to(device)
+    X = process.normalization(data)
     
     center_vector_path = './data/tensor/center-weights.pt'
     if os.path.isfile(center_vector_path):
         center_weights = torch.load(center_vector_path)
         centers = center_weights['centers'].to(device)
-        weights = center_weights['weights'].to(device)
+        weights = center_weights['weights'].to(device) - 1
         dist = process.cal_distance_matrix(centers.T, X.T)
         # top_values, top_indices = torch.topk(-dist, k=3, dim=0)
         y = torch.argmin(dist, dim=0)
@@ -207,13 +188,13 @@ def get_dataset(m=2, default_data='./data/tensor/raw.pt'):
         # 这样计算得到的类别并无实际意义，需要进一步人工筛选得到类别-权值的对应关系
         y = torch.argmin(Dist, dim=0)
     print('dataset ready')
-    return X.cpu(), y.cpu(), centers.cpu()
+    return X.cpu(), y.cpu(), centers.cpu(), topology, sizes
 
 def visualize_clusters():
     '''
     使用TSNE把数据可视化
     '''
-    X, y, _ = get_dataset(min=9, max=20)
+    X, y, _, _, _ = get_dataset(min=9, max=20)
     X = X.numpy()
     y = y.numpy()
     # 创建TSNE对象，将数据降维到二维
@@ -228,38 +209,30 @@ def visualize_clusters():
     # plt.legend()
     plt.savefig('tsne-2D2.png')
 
-def save(filename):
-    topology = []
-    with open('./data/transformed_data/raw.json', 'r', encoding='utf-8') as file:
-        raw = json.load(file)
-        for node_content in raw:
-            for topo_content in node_content:
-                # 根据拓扑生成稀疏矩阵
-                topo = torch.tensor(topo_content['topo'], dtype=torch.long).T
-                row_indices = topo[0, :]
-                col_indices = topo[1, :]
-                size = col_indices.size()[0]
-                symmetric_row_indices = torch.cat((row_indices, col_indices))
-                symmetric_col_indices = torch.cat((col_indices, row_indices))
-                values = torch.full((size*2,), 1.0, dtype=torch.float)
-                adj_matrix = torch.sparse_coo_tensor(
-                    torch.stack((symmetric_row_indices, symmetric_col_indices), dim=0),
-                    values,
-                    (size, size))
-                # 对应拓扑id
-                num = topo_content['len']
-                topology.append((adj_matrix, num))
-    X, y, _ = get_dataset()
-    flag = 0
-    res = []
-    for i, (adj_matrix, num) in enumerate(topology):
-        x_chunks = torch.chunk(X[flag: flag+num], 100, dim=0)
-        y_chunks = torch.chunk(y[flag: flag+num], 100, dim=0)
-        for xy in tuple(zip(x_chunks, y_chunks)):
-            data = { 'feature': xy[0], 'label': xy[1], 'topo': adj_matrix }
-            res.append(data)
-        flag += num
-    torch.save(res, f'./data/tensor/{filename}.pt')
+def get_edge_index(topology):
+    topo = torch.tensor(topology, dtype=torch.long).T
+    row_indices = topo[0, :]
+    col_indices = topo[1, :]
+    symmetric_row_indices = torch.cat((row_indices, col_indices))
+    symmetric_col_indices = torch.cat((col_indices, row_indices))
+    return torch.vstack((symmetric_row_indices, symmetric_col_indices))
+    
+def save():
+    X, y, _, topology, sizes = get_dataset()
+    features = []
+    labels = []
+    sum = 0
+    topology = [get_edge_index(topo) for topo in topology]
+    topology = [el for el in topology for _ in range(100)]
+    
+    for size in sizes:
+        features.append(X[sum: sum + size])
+        labels.append(y[sum: sum + size])
+        sum += size
+    
+    torch.save(features, f'./data/tensor/features.pt')
+    torch.save(labels, f'./data/tensor/labels.pt')
+    torch.save(topology, f'./data/tensor/topology.pt')
 
 def load(path):
     tensor_dict = torch.load(path)
@@ -306,7 +279,7 @@ def plot_radar_charts(data, dimension_labels):
 
 
 def set_weight():
-    _, _, c = get_dataset(m=2.5)
+    _, _, c, _, _ = get_dataset(m=2.5)
     c = c.T
     torch.save(c, './data/tensor/center-vectors.pt')
     c[:, [0, 2, 3]] *= -1
