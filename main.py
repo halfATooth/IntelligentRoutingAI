@@ -1,19 +1,48 @@
 import posix_ipc
 import mmap
 import time
+from model.model import GCN
+import torch
+from data.dataset import get_data_on_simulator
 
 DATA_BLOCK_NAME = "/data_memory"
 CONTROL_BLOCK_NAME = "/control_memory"
 
-DATA_BLOCK_SIZE = 1024
-CONTROL_BLOCK_SIZE = 1024
+DATA_BLOCK_SIZE = 10240
+CONTROL_BLOCK_SIZE = 32
 
-duration = 100 # seconds
+duration = 610 # seconds
 interval = 500 # ms
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = GCN(4, 16, 7)
+model.load_state_dict(torch.load('./model/gcn.pth'))
+model = model.to(device)
+model.eval()
+meanstd = torch.load('./model/meanstd.pt')
+mean = meanstd['mean'].to(device)
+std = meanstd['std'].to(device)
+
+receive = ''
 
 def predict(data):
   print('receive: \n{0}'.format(data))
-  return '0 1 1/0 2 1/1 3 1/2 3 1'
+  global receive
+  receive += data
+  
+  feature, topology, edge_map = get_data_on_simulator(data)
+  feature = feature.to(device)
+  feature = (feature - mean) / std
+  topology = topology.to(device)
+  
+  out = model(feature, topology)
+  pred = out.argmax(dim=1).cpu().tolist()
+  print(pred)
+  res = ''
+  for i in range(len(edge_map)):
+    res = res + f'{edge_map[i][0]} {edge_map[i][1]} {pred[i] + 1}/'
+  res = res.strip('/')
+  return res
 
 def getPaddedLength(s):
   length = len(s)
@@ -35,7 +64,7 @@ try:
   dataMemMap = mmap.mmap(dataShm.fd, dataShm.size)
   controlShm = posix_ipc.SharedMemory(CONTROL_BLOCK_NAME, posix_ipc.O_CREAT, size=CONTROL_BLOCK_SIZE)
   controlMemMap = mmap.mmap(controlShm.fd, controlShm.size)
-  
+  print('start')
   # round robin
   for _ in range(int(duration * 1000 / interval)):
     controlMessage = read(controlMemMap)
@@ -55,3 +84,19 @@ try:
     
 except posix_ipc.ExistentialError as e:
     print(f"共享内存操作出错: {e}")
+
+with open('./data/evalafter', 'w') as file:
+    file.writelines(receive)
+# print(receive)
+# arr = receive.strip().split('\n')
+# delay = []
+# drop = []
+# for str in arr:
+#   d = str.split(' ')
+#   delay.append(d[2])
+#   drop.append(d[4])
+  
+# delay = torch.mean(torch.tensor(delay))
+# drop = torch.mean(torch.tensor(drop))
+# print(delay)
+# print(drop)

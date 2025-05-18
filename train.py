@@ -3,26 +3,13 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 from torch_geometric.datasets import Planetoid
 import torch_geometric.transforms as T
+from model.model import GCN
 
-
-# 定义图卷积神经网络模型
-class GCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, out_channels)
-
-    def forward(self, x, edge_index):
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = F.dropout(x, training=self.training)
-        x = self.conv2(x, edge_index)
-        return F.log_softmax(x, dim=1)
 
 # 初始化模型、优化器和损失函数
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # 加载数据集
-dataset = torch.load('./data/tensor/data1.pt')
+# dataset = torch.load('./data/tensor/data1.pt')
 features = torch.load('./data/tensor/features.pt')
 features = [x.to(device) for x in features]
 labels = torch.load('./data/tensor/labels.pt')
@@ -53,6 +40,8 @@ def test(X, y, topo):
     model.eval()
     out = model(X, topo)
     pred = out.argmax(dim=1)
+    # print(y.cpu())
+    # print(pred.cpu())
     test_correct = pred == y
     test_acc = int(test_correct.sum()) / int(test_correct.size()[0])
     return test_acc
@@ -60,8 +49,8 @@ def test(X, y, topo):
 ct = 0
 # 训练循环
 try:
-    for epoch in range(2):
-        for i in range(len(features)):
+    for epoch in range(1):
+        for i in range(len(features)-100):
             # X, y, topo = data
             X = features[i]
             y = labels[i]
@@ -71,5 +60,7 @@ try:
                 test_acc = test(X, y, topo)
                 print(f'Epoch: {(ct + 1)//100}, Loss: {loss:.4f}, Test Acc: {test_acc:.4f}')
             ct += 1
+    model = model.cpu()
+    torch.save(model.state_dict(), './model/gcn.pth')
 except Exception as e:
     print(f'err: {e}')

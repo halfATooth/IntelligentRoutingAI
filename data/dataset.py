@@ -4,7 +4,10 @@ import matplotlib.pyplot as plt
 import os
 import json
 import torch
-import process
+try:
+    import process
+except Exception:
+    import data.process
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
@@ -72,31 +75,34 @@ def generate_topology_data(minNodes:int=4, maxNodes:int=30, graphNum:int=20, dat
         dir = f'{dataDir}/nodes_num_{n}'
         write_graphs_to_file(graphs, dir)
 
-def get_transformed_graph(node, topo):
+def transform_topo(lines):
     edges = []
     node_map = {}
     new_edges = []
+    for i in range(len(lines)):
+        line = lines[i]
+        u, v = map(int, line.split())
+        node_map[(u, v)] = i
+        edges.append((u, v))
+    # 遍历每一对边
+    for i in range(len(edges)):
+        for j in range(i + 1, len(edges)):
+            edge1 = edges[i]
+            edge2 = edges[j]
+            # 检查两条边是否有公共顶点
+            if edge1[0] in edge2 or edge1[1] in edge2:
+                new_edges.append((i, j))
+    return node_map, new_edges
+
+def get_transformed_graph(node, topo):
     with open(f'./data/net/nodes_num_{node}/{topo}/topology', 'r', encoding='utf-8') as file:
         lines = file.readlines()
-        for i in range(len(lines)):
-            line = lines[i]
-            u, v = map(int, line.split())
-            node_map[(u, v)] = i
-            edges.append((u, v))
-        # 遍历每一对边
-        for i in range(len(edges)):
-            for j in range(i + 1, len(edges)):
-                edge1 = edges[i]
-                edge2 = edges[j]
-                # 检查两条边是否有公共顶点
-                if edge1[0] in edge2 or edge1[1] in edge2:
-                    new_edges.append((i, j))
-    return node_map, new_edges
+        return transform_topo(lines)
 
 def extract_data(filepath):
     data_list = []
     with open(filepath, 'r', encoding='utf-8') as file:
-        content = content = file.read()
+        content = file.read()
         # 按 {} 分割数据
         data_blocks = content.split('{')
         for block in data_blocks:
@@ -150,11 +156,59 @@ def transform_raw_data(min_node, max_node):
                 sizes.append(len(block) // 2)
     return features, topology, sizes 
 
+def process_string(input_string):
+  lines = input_string.splitlines()
+  new_lines = []
+  for line in lines:
+    parts = line.split(" ", 2)
+    if len(parts) > 2 and int(parts[0]) < int(parts[1]):
+      new_lines.append(parts[0] + " " + parts[1])
+
+  return new_lines
+
+def get_data_on_simulator(raw: str):
+    raw = raw.strip()
+    lines = raw.split('\n')
+    node_map, new_edges = transform_topo(process_string(raw))
+    block = []
+    for line in lines:
+        datastr = line.split(' ')
+        data = [int(datastr[0]), int(datastr[1]), float(datastr[2]),
+                float(datastr[3]), float(datastr[4]), float(datastr[5])]
+        block.append(data)
+    feature = get_feature_from_record(block, node_map)
+    feature = torch.tensor(feature, dtype=torch.float32)
+    # feature = process.normalization(feature)
+    topology = get_edge_index(new_edges)
+    
+    edge_map = [None] * len(node_map)
+    for k in node_map:
+        i = node_map[k]
+        edge_map[i] = k
+    return feature, topology, edge_map
+
 def read_data(file_path='./data/transformed_data/raw.json'):
     '''
     读取ns-3生成的网络状态数据
     '''
     return transform_raw_data(4, 20)
+
+def get_mean_std():
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
+    
+    features, _, _ = read_data()
+    data = torch.tensor(features, dtype=torch.float32).to(device)
+    mean = torch.mean(data, dim=0).cpu()
+    std = torch.std(data, dim=0).cpu()
+    data = {'mean': mean, 'std': std}
+    # print(f'mean: {mean}, std: {std}')
+    torch.save(data, './model/meanstd.pt')
+
+get_mean_std()
 
 def get_dataset(m=2, default_data='./data/tensor/raw.pt'):
     '''
